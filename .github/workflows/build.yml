@@ -1,0 +1,66 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      # Kalau repo hanya berisi file zip (belum diekstrak), buka zip-nya dulu.
+      - name: Unzip project if needed
+        run: |
+          if [ -z "$(find . -name settings.gradle.kts -not -path './.git/*' | head -n 1)" ]; then
+            z=$(ls *liquidglass*.zip 2>/dev/null | head -n 1)
+            if [ -z "$z" ]; then z=$(ls *.zip 2>/dev/null | head -n 1); fi
+            if [ -n "$z" ]; then
+              echo "Membuka $z"
+              mkdir -p _src
+              unzip -q -o "$z" -d _src
+            fi
+          fi
+
+      - name: Find project directory
+        id: proj
+        run: |
+          f=$(find . -name settings.gradle.kts -not -path './.git/*' | head -n 1)
+          if [ -z "$f" ]; then
+            echo "settings.gradle.kts tidak ditemukan. Isi repo:"
+            ls -R | head -n 60
+            exit 1
+          fi
+          dir=$(dirname "$f")
+          echo "Proyek ada di: $dir"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        id: build
+        continue-on-error: true
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: gradle assembleDebug --no-daemon 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+
+      - name: DAFTAR ERROR (buka ini kalau gagal)
+        if: steps.build.outcome == 'failure'
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          echo "===== ERROR KOTLIN ====="
+          grep -E '^e: ' build.log | sed 's#file:///[^ ]*/liquidvolume/##' | head -n 40
+          exit 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AlatIOS-APK
+          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
